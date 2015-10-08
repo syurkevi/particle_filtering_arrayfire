@@ -7,8 +7,8 @@ using namespace af;
 using namespace std;
 
 //static const int samples = 1e7;
-static const int SAMPLES = 100;
-static int WIDTH=800, HEIGHT=600;
+static const int SAMPLES = 1000;
+static int WIDTH=1000, HEIGHT=400;
 
 static float boundary_coors[] = { 0,     0,
                                   WIDTH, 0,
@@ -20,11 +20,12 @@ static float boundary_vec_const[] =  { WIDTH,  0,
                                   -WIDTH,  0,
                                   0, -HEIGHT };
 
-float covariance_consts[] = { 1, af::Pi/16 }; //variance on state update for displacement and heading
+float covariance_consts[] = { 0.2, af::Pi/16 }; //variance on state update for displacement and heading
 //TODO: variance? or variance^^ ?
 
 void state_update(array &state_vecs, float dx, float dth, array covariance);
 af::array sensor_distances(af::array &state_vecs);
+af::array resample(int iterations, af::array weights, af::array indices);
 
 int main(int argc, char *argv[]) {
     try {
@@ -66,9 +67,26 @@ int main(int argc, char *argv[]) {
 
             array distance_vector = sensor_distances(particles);
             float actual_distance = distance_vector.scalar<float>();
-            cout<<actual_distance<<endl;
+            //assign weights to each particle
             weights = exp(-0.5 * (distance_vector - constant(actual_distance, SAMPLES) * 0.1)) + 0.01;
-            af_print(weights);
+            //normalize weights
+            float wsum = af::sum(weights).scalar<float>();
+            weights /= wsum;
+
+            array sorted, indices;
+            sort(sorted, indices, weights);
+            array sample_space = accum(weights);
+
+            array resampled_indices = resample(5, weights, indices);
+            array xs = particles.col(0);
+            array ys = particles.col(1);
+            array ts = particles.col(2);
+            af_print(xs);
+            af_print(particles.col(0));
+            particles.col(0) = xs(resampled_indices);
+            particles.col(1) = ys(resampled_indices);
+            particles.col(2) = ts(resampled_indices);
+            //af_print(particles);
 
             array image = constant(0, HEIGHT, WIDTH, f32);
             array ids(SAMPLES, u32);
@@ -104,6 +122,7 @@ void state_update(af::array &state_vecs, float dx, float dth, array covariance){
 }
 
 af::array sensor_distances(af::array &state_vecs){
+    //TODO symmetric distance testing
     array boundaries(4, 2, boundary_coors);
     array sensor_endpoints(SAMPLES, 2);
     sensor_endpoints.col(0) = 100/cos(state_vecs.col(0));
@@ -134,3 +153,18 @@ af::array sensor_distances(af::array &state_vecs){
     return min(vec_diff,1);
 }
 
+
+af::array resample(int iterations, af::array weights, af::array indices) {
+    array resampled = indices;
+    for(int i=0;i<iterations;i++){
+        array u = randu(SAMPLES); // <x,y,theta>
+        array j = shift(indices, (SAMPLES+i)/2);
+
+        array ratio = weights(indices) / weights(j);
+        resampled(ratio < u) = shift(indices, (SAMPLES+i)/2)(ratio < u);
+    }
+
+    //af_print(resampled);
+    resampled(0) = 0;
+    return resampled;
+}
